@@ -1,0 +1,213 @@
+---
+title: "An end to end Machine Learning project using XGBoost framework in R studio"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+A Machine learning approach (done in R-studio) to detect whether a person will have Chronic Kidney Disease ('ckd') nor not ('notckd') based on seleted clinical features.
+
+The raw data in csv format was taken from a GitHub repository of Mr. Abishek Gupta (https://github.com/Elysian01). Although deidentified, possibly these are EHR data belonging to real persons. SO, please be respectful and use them in a responsible manner.
+
+Most of the codes and descriptions are re-used from a published R notebook (https://www.kaggle.com/rtatman/machine-learning-with-xgboost-in-r) written by Rachael Tatman, a Data Scientist at Kaggle.
+
+
+
+```{r}
+# Importing libraries
+library(xgboost) 
+library(tidyverse)
+```
+
+```{r}
+# Puting the original csv in a data frame
+ckd_original <- read_csv("ckd_data.csv")
+```
+
+```{r}
+head(ckd_original)
+```
+
+```{r}
+# As alaways, we need to run some cleansing operations on the original data set to optimize it for modelling. The cleansing process will largely depend on the specific data set and the modelling framework to be used. However, some of the steps are pretty common and applicable to most of the cases.
+
+# For this particular project we'll need to go through the following cleansing and modification steps:
+
+# 1. Shuffling the rows: A usual and essential prerequisit for training an ML model. The objective is to get rid of any patterns in the split datasets. In our original csv file, the rows are sorted on the 'classification' column which contains our target variable! As a result, all 'ckd' cases appeared first; this pattern must be removed by shuffling the data frame. This is a very simple task, we can choose any number as a 'random seed'. 
+
+# 2. From the training data set, we need to take out the column containing the target variable: The column named 'classification' contains our target variable ('ckd'/'notckd')
+
+# 3. For this specific  modelleing framework, we have to make sure that all the data types are in either numeric or logical. We should convert the character type categorical data into numeric forms by applying an endoding method. 
+
+# 3. Converting dataset into testing and training subsets: A common step for ML projects
+
+# 4. Converting the cleaned data frame to a matrix.
+```
+
+
+```{r}
+# Shuffle data frame using an arbitrary number as a 'random seed'
+set.seed(5523)
+ckd_random <- ckd_original[sample(1:nrow(ckd_original)), ]
+
+```
+
+
+```{r}
+# Prepare a subset of the dataframe removing our target variable (contained in 'classification' column) and check the new data frame 
+
+ckd_notarget <- ckd_random %>%
+    select(-starts_with("classification"))
+head(ckd_notarget)
+```
+
+```{r}
+# We have succesfully removed the classification column. However, we'll need the classification labels to train and evaluate the models.So, before we forget, this is a good time to generate a new vector containing the target labels ('ckd' or 'notckd'). We'll check the new vector by the head()function.
+
+ckd_labels <- ckd_random[, c("classification")]
+head(ckd_labels)
+```
+
+```{r}
+# Fantastic! We got the labels in the same sorted order as in the parent data frame (ckd_random). However, since the data type is 'character'and we need to change that to either a 'numeric' or a 'logical' data type for the modelling framework(XGBoost). So, let's convert it to a boolean vector and check.
+
+ckd_labels_boolean <- with(ckd_labels, ifelse(classification == 'ckd', TRUE, ifelse(classification == 'notckd', FALSE, NA)))
+
+head (ckd_labels_boolean)
+
+```
+
+```{r}
+# Now let us take a closer look on the the structure of our data frame before proceeding to build our model
+str(ckd_notarget)
+
+```
+
+```{r}
+# Oh no! In the columns named 'pcv', 'wc', and 'rc', the  numeric data are stored as charater. We need to fix that by converting them into numeric data
+
+ckd_notarget$pcv = as.numeric(as.character(ckd_notarget$pcv))
+
+ckd_notarget$wc = as.numeric(as.character(ckd_notarget$wc))
+
+ckd_notarget$rc = as.numeric(as.character(ckd_notarget$rc))
+
+```
+
+```{r}
+# Rechecking the ckd_notarget df after the correction (strings to numeric, for simplicity no new data frame is created)
+
+str(ckd_notarget)
+
+```
+
+
+```{r}
+# Great! We fixed the data type error. Note that some of the values could not be converted and they are replaced by null values (NA). 
+
+# Now, we'll change the remaining character type data into numeric by one-hot encoding. 'caret' is a powerful library that will do this transformation with two lines of codes (find the details here: https://www.pluralsight.com/guides/encoding-data-with-r).
+
+# We also need to remove  the 'id' column which is numeric but it would make no sense if included in our model.
+
+# we'll nake a new data frame named ckd_transformed after the modifications and have a look at it using the glimpse() function 
+
+library(caret)
+
+dmy <- dummyVars(" ~ .", data = ckd_notarget, fullRank = T)
+ckd_transformed <- data.frame(predict(dmy, newdata = ckd_notarget))
+
+ckd_transformed <- select(ckd_transformed, -c(id))
+
+glimpse(ckd_transformed)
+
+```
+
+```{r}
+# Rechek some of the rows, let's check the first 10 rows:
+head(ckd_transformed, n=10)
+```
+
+
+```{r}
+# Finally, everything looks good. We are now ready to convert the data frame into a matrix to start modelling!
+
+ckd_matrix <- data.matrix(ckd_transformed)
+
+```
+
+```{r}
+head(ckd_matrix)
+```
+
+
+
+```{r}
+# Now we'll devide our matrix objects (both 'ckd_matix' and 'ckd_labels_boolean') into training (with 70% of the total available rows) and testing (the remaining 30% of rows) subsets.
+
+
+rows_training <- round(length(ckd_labels_boolean) * .7) # this is to find the number of rows to be used in the training subset 
+
+train_data <- ckd_matrix[1:rows_training,]
+train_labels <- ckd_labels_boolean[1:rows_training]
+
+# testing data
+test_data <- ckd_matrix[-(1:rows_training),]
+test_labels <- ckd_labels_boolean[-(1:rows_training)]
+
+```
+
+
+```{r}
+# For a faster operation of the XGBoost framework, we'll convert our data matrix into 'Dmatrix' objects. This is an optional step.
+
+
+dtrain <- xgb.DMatrix(data = train_data, label= train_labels)
+dtest <- xgb.DMatrix(data = test_data, label= test_labels)
+
+```
+
+```{r}
+# We'll train our models using binary logistic regression (because our goal is to predict something that is binary in nature. Either patients are going to have ckd or they do not). Please note that if we do not specify binarry logistic as our objective function, a linear regression will be conducted by XGBoost.
+
+
+model <- xgboost(data = dtrain,   
+                 nround = 16, # this is the maximum number of boosting iterations, you can use a different number
+                 objective = "binary:logistic")
+
+```
+
+```{r}
+# The error on the training data is depiccted by 'logloss'. We can see that the loss or error is reduced gradually from round 1 to 16.
+
+# Now the real test! Let's see how our model performs in terms of making predictions in the test data set
+pred <- predict(model, dtest)
+
+# View the error
+err <- mean(as.numeric(pred > 0.5) != test_labels)
+print(paste("test-error=", err))
+
+```
+
+```{r}
+
+#Bravo! We see a lower error on our testing data compared to the training data.It implies that out model is not over-fitted. 
+
+# Now let's do some plotting to vizualize the trees from the model 
+
+xgb.plot.multi.trees(feature_names = names(ckd_matrix), 
+                     model = model)
+
+```
+
+```{r}
+# And finally, another plotting to visualize the relative importance of the features in our model
+importance_matrix <- xgb.importance(names(ckd_matrix), model = model)
+xgb.plot.importance(importance_matrix)
+```
+
+
+```{r}
+# The basics are done. However, we can always try to improve our model performance by tuning it.But that is another story for another day!
+```
+
